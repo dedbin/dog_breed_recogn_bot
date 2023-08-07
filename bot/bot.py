@@ -1,13 +1,18 @@
-import os
+import os, io
 import datetime
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import telebot
 from token_for_bot import token, main_id
-from model.model import load_and_preprocess_test_image
-import numpy as np
-from model.setup import breeds, translations
+from is_dog.is_dog_funk import prep_for_dog
+from model_dogs_breeds.model import load_and_preprocess_test_image
+from model_dogs_breeds.setup import breeds, translations
+
 from keras.models import load_model
+from keras.preprocessing import image
+
+from PIL import Image
+import numpy as np
 
 logfile = str(datetime.date.today()) + '.log'
 
@@ -17,7 +22,8 @@ bot.set_my_commands([
     telebot.types.BotCommand("/help", "а че собственно делать"),
 ])
 
-model = load_model(r'C:\Users\red1c\ dog_breed_recogn_bot\model\model.h5')
+model_for_dog_breed = load_model(r'C:\Users\red1c\ dog_breed_recogn_bot\model_dogs_breeds\model_for_dog_breed.h5')
+model_dogs_vs_cats = load_model(r'C:\Users\red1c\ dog_breed_recogn_bot\model_dogs_vs_cats\dog_vs_cat.h5')
 
 
 @bot.message_handler(commands=['start'])
@@ -37,6 +43,25 @@ def help(message: telebot.types.Message):
                                       'поэтому прошу тебя отправлять тело песы целиком')
 
 
+def is_dog(img_bytes):
+    img = Image.open(io.BytesIO(img_bytes))
+    img = img.convert('RGB')
+    target_size = (150, 150)
+    img = img.resize(target_size)
+    img_tensor = image.img_to_array(img)
+    img_tensor = np.expand_dims(img_tensor, axis=0)
+    img_tensor /= 255.
+
+    prediction = model_dogs_vs_cats.predict(img_tensor)
+    prediction = str(prediction).replace('[', '').replace(']', '')
+    prediction = float(prediction) * 100
+    print(f'{prediction = }')
+    if prediction > 50:
+        return True
+    else:
+        return False
+
+
 @bot.message_handler(content_types=['photo'])
 def predict_tg(message: telebot.types.Message):
     fileID = message.photo[-1].file_id
@@ -45,14 +70,20 @@ def predict_tg(message: telebot.types.Message):
         downloaded_file = bot.download_file(file_info.file_path)
         with open(f"image{fileID}.jpg", 'wb') as new_file:
             new_file.write(downloaded_file)
-        img = load_and_preprocess_test_image(f"image{fileID}.jpg")
-        img = np.expand_dims(img, axis=0)
-        prediction = model.predict(img)
-        try:
-            bot.send_message(message.chat.id, f'я думаю что это {translations[breeds[np.argmax(prediction)]]}. если я не прав, пиши @math_is_ez')
-
-        except KeyError as e:
-            bot.send_message(message.chat.id,  f'я думаю что это {breeds[np.argmax(prediction)]}. если я не прав, пиши @math_is_ez')
+        if prep_for_dog(f"image{fileID}.jpg"):
+            img = load_and_preprocess_test_image(f"image{fileID}.jpg")
+            img = np.expand_dims(img, axis=0)
+            prediction = model_for_dog_breed.predict(img)
+            print(f'{np.max(prediction) = }')
+            try:
+                bot.send_message(message.chat.id,
+                                 f'я думаю что это {translations[breeds[np.argmax(prediction)]]}. если я не прав, пиши @math_is_ez')
+    
+            except KeyError as e:
+                bot.send_message(message.chat.id,
+                                 f'я думаю что это {breeds[np.argmax(prediction)]}. если я не прав, пиши @math_is_ez')
+        else:
+            bot.send_message(message.chat.id, 'прости, но мне кажется, что на этой фотке не собака')
     except Exception as e:
         bot.send_message(message.chat.id, "что-то пошло через жопу")
         with open(logfile, 'a', encoding='utf-8') as f:
@@ -61,9 +92,10 @@ def predict_tg(message: telebot.types.Message):
             bot.send_message(main_id, log)
     finally:
         try:
-        # удаление фото
+            # удаление фото
             os.remove(f"image{fileID}.jpg")
         except Exception as e:
             pass
+
 
 bot.polling(non_stop=True)
